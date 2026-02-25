@@ -692,8 +692,7 @@ action:
   - choose:
       - conditions:
           - condition: template
-            value_template: >
-              {{ states(soc) | float(0) >= 99 and states(solakon_mode) == '1' }}
+            value_template: "{{ states(soc) | float(0) >= 99 and states(solakon_mode) == '1' }}"
         sequence:
           # Keine Batterieentladung
           - service: number.set_value
@@ -708,7 +707,8 @@ action:
               value: "{{ states(solar_power_sensor) | float(0) }}"
 
           - stop: Batterie voll – Einspeisung erlaubt
-          
+
+
   # -------------------------------------------------------------------------------------------------
   # AKTION E: PI-Regler Logik, Timeout-Refresh UND Entlade-Limit-Absicherung
   # NUR ausführen wenn Modus aktiv ist UND (Zone 1 ODER Tag)!
@@ -901,6 +901,7 @@ action:
       value: "{{ [0, final_power_calculated] | max | round(0) }}"
   - delay:
       seconds: '{{wait_time_int}}'
+
 
 
 
