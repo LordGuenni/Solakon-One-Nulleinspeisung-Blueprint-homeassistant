@@ -1,10 +1,11 @@
 blueprint:
-  name: Solakon ONE Nulleinspeisung (DE) - Dynamisch & SOC-Gesteuert (V207)
+  name: Solakon ONE Nulleinspeisung (DE) - Dynamisch & SOC-Gesteuert (V208 + Smart Surplus)
   description: |
-    ### Dynamische Nulleinspeisung mit SOC-Zonenlogik
+    ### Dynamische Nulleinspeisung mit SOC-Zonenlogik & Smarter Überschusseinspeisung
       Dieser Home Assistant Blueprint implementiert eine dynamische Nulleinspeisung für den Solakon ONE Wechselrichter.
-      Er nutzt einen PI-Regler (Proportional-Integral-Regler) zur präzisen Steuerung der AC-Ausgangsleistung und eine dreistufige State-of-Charge (SOC)-Logik zur effizienten Verwaltung des Batteriespeichers.
-      Ziel dieses Blueprints ist es PV-Energie direkt auszugeben ohne den Umweg über die Batterie, dies verhindert das "flackern" das die App mit ihrer (lade ein Prozent -> entlade ein Prozent -> repeat) Funktionsweise verursacht und soll die Batterie schonen.
+      Er nutzt einen PI-Regler (Proportional-Integral-Regler) zur präzisen Steuerung der AC-Ausgangsleistung und eine SOC-Logik zur effizienten Verwaltung des Batteriespeichers.
+      
+      **Neu:** Wenn der Speicher voll ist UND ein echter PV-Überschuss vorliegt, wird dieser direkt ins Netz eingespeist. Steigt der Hausverbrauch wieder, kehrt das System automatisch zur Nulleinspeisung zurück.
     
     ---
     
@@ -16,21 +17,23 @@ blueprint:
     
     ---
     
-    ### 🔋 Dreistufige SOC-Zonenlogik
-    Die Logik unterteilt den Batterieladestand (SOC) in drei Zonen:
+    ### 🔋 Vierstufige SOC-Zonenlogik
+    Die Logik unterteilt den Batterieladestand (SOC) nun in vier Zonen:
+
+    #### 0. Zone: Überschuss-Einspeisung (Maximaler SOC)
+    * **Bedingung:** SOC erreicht Schwelle (z.B. 100 %) UND PV-Erzeugung ist größer als der aktuelle Hausverbrauch.
+    * **Aktion:** Nulleinspeisung wird umgangen. AC-Output-Limit wird auf Maximum (z.B. 800W) gesetzt.
+    * **Regelung:** Max. Entladestrom auf 0 A. Es wird nur reiner PV-Strom ins Netz geleitet. Fällt die PV-Leistung ab, wird der Modus sofort beendet und der Akku übernimmt wieder.
     
     #### 1. Zone: Aggressive Regelung (Entladezyklus / Hoher SOC)
     * **Bedingung:** SOC > Oberer Schwellenwert (`soc_fast_limit`) ODER Entladezyklus aktiv.
     * **Aktion:** Max. Entladestrom wird auf den Standardwert (z.B. 40 A) gesetzt.
-    * **Regelung:** PI-Regler mit Nullpunkt-Offset (z.B. 30 W) zur Verschiebung des Regelziels hin zu leichtem Netzbezug oder exacter Nulleinspeisung.
-    * **Verhalten:** Einmal aktiviert, läuft Zone 1 bis SOC ≤ 20% fällt (kein Yo-Yo-Effekt).
+    * **Regelung:** PI-Regler steuert auf Nulleinspeisung.
     
     #### 2. Zone: Batterieschonende Regelung (Zwischen-SOC)
-    * **Bedingung:** SOC zwischen Unterer (`soc_conservation_limit`) und Oberer Schwelle, UND Entladezyklus inaktiv.
-    * **Aktion:** Max. Entladestrom wird auf 0 A gesetzt, kein Einfluss auf Batterieheizung, begrenzt die Ausgangsleistung der Solakon sicherer auf die PV-Leistung.
-    * **Regelung:** PI-Regler mit Nullpunkt-Offset (z.B. 30 W) zur Verschiebung des Regelziels hin zu leichtem Netzbezug oder exacter Nulleinspeisung.
-    * **Dynamische Obergrenze:** Entladeleistung wird durch Max(0, PV - Reserve) gedeckelt.
-    * **Nachtabschaltung:** Optional kann Zone 2 bei PV < Schwelle deaktiviert werden (Zone 1 bleibt aktiv).
+    * **Bedingung:** SOC zwischen Unterer und Oberer Schwelle, UND Entladezyklus inaktiv.
+    * **Aktion:** Max. Entladestrom wird auf 0 A gesetzt.
+    * **Regelung:** PI-Regler regelt PV-Leistung zum Decken der Grundlast ab.
     
     #### 3. Zone: Sicherheits-Stopp (Niedriger SOC)
     * **Bedingung:** SOC fällt auf oder unter den Unteren Schwellenwert.
@@ -47,7 +50,7 @@ blueprint:
         name: "🔌 NETZ-SENSOR (Extern - z.B. Shelly 3EM):"
         description: "Hier findest du den notwendigen Netzverbrauchssensor."
         collapsed: true 
-        input:    
+        input:   
           grid_power_sensor:
             name: 🔌 Shelly/Netz-Leistungssensor (ERFORDERLICH)
             description: |
@@ -65,7 +68,7 @@ blueprint:
         name: "⚡ SOLAKON ONE - ENTITÄTEN:"
         description: "Hier findest du die notwendigen Solakon One Entitäten mit ausgewählten Standarts."
         collapsed: true 
-        input:    
+        input:   
           solar_power_sensor:
             name: ☀️ Solakon ONE - Solarleistung (PV-Erzeugung)
             description: Die aktuelle PV-Gesamterzeugung in Watt.
@@ -170,7 +173,7 @@ blueprint:
         name: "🎚️ REGELUNGS-PARAMETER (PI):"
         description: "Hier findest du die Parameter für die PI-regelung, diese solltest du nicht anfassen müssen, aber du kannst."
         collapsed: true 
-        input:    
+        input:   
           regulator_factor:
             name: 🎛️ P-Faktor (Proportional-Verstärkung)
             description: |
@@ -227,7 +230,19 @@ blueprint:
         name: "🔋 SOC-ZONEN-PARAMETER:"
         description: "Hier findest du die Parameter für die SOC-Zonensteuerung."
         collapsed: true 
-        input:    
+        input:   
+          soc_export_limit:
+            name: 🔋 SOC-Schwelle "Überschuss-Einspeisung"
+            description: |
+              Erreicht der SOC diesen Wert (z.B. 100 %) und es liegt Überschuss an, wird die Nulleinspeisung ausgesetzt.
+              Die AC-Ausgangsleistung wird auf das Hard Limit (z.B. 800W) gesetzt und PV-Überschuss wird ins Netz gedrückt. 
+            default: 100
+            selector:
+              number:
+                min: 50
+                max: 100
+                unit_of_measurement: "%"
+                
           soc_fast_limit:
             name: 🔋 SOC-Schwelle "Zone 1 Start" (Aggressive Entladung)
             description: |
@@ -367,7 +382,7 @@ blueprint:
         name: "🌙 NACHTABSCHALTUNG (Optional):"
         description: "Hier findest du die Parameter für die optionale Nachtabschaltung (atm wenig effektive Änderung/Platzhalter für mögliches zukünftiges Abschalten des Inverters)."
         collapsed: true 
-        input:    
+        input:   
           night_shutdown_enabled:
             name: 🌙 Nachtabschaltung aktivieren
             description: |
@@ -400,6 +415,7 @@ variables:
   # ===========================================
   
   # Zonen-Schwellwerte
+  soc_export_limit_int: !input soc_export_limit
   soc_fast_limit_int: !input soc_fast_limit
   soc_conservation_limit_int: !input soc_conservation_limit
   
@@ -685,45 +701,17 @@ action:
                 data:
                   entity_id: !input active_power_number
                   value: 0
-
-    # -------------------------------------------------------------------------------------------------
-  # ZUSATZ: Batterie voll → Einspeisung erlauben (PI-Regler überspringen)
-  # -------------------------------------------------------------------------------------------------
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ states(soc) | float(0) >= 99 and states(solakon_mode) == '1' }}"
-        sequence:
-          # Keine Batterieentladung
-          - service: number.set_value
-            data:
-              entity_id: !input max_discharge_current_number
-              value: 0
-
-          # Volle PV-Leistung freigeben
-          - service: number.set_value
-            data:
-              entity_id: !input active_power_number
-              value: "{{ states(solar_power_sensor) | float(0) }}"
-
-          - stop: Batterie voll – Einspeisung erlaubt
-
-
+                          
   # -------------------------------------------------------------------------------------------------
   # AKTION E: PI-Regler Logik, Timeout-Refresh UND Entlade-Limit-Absicherung
   # NUR ausführen wenn Modus aktiv ist UND (Zone 1 ODER Tag)!
   # -------------------------------------------------------------------------------------------------
   - condition: template
     value_template: >
-      {{
-        states(solakon_mode) == '1'
-        and states(soc) | float(0) < 99
-        and (
-          is_state(cycle_active, 'on')
-          or not night_shutdown_enabled_bool
-          or (states(solar_power_for_night_check) | float(0)) >= night_pv_threshold
-        )
-      }}
+      {{ states(solakon_mode) == '1' and
+         (is_state(cycle_active, 'on') or 
+          not night_shutdown_enabled_bool or
+          (states(solar_power_for_night_check) | float(0)) >= night_pv_threshold) }}
     
   # ===========================================
   # BLOCK 2: Variablen NUR für PI-Regler
@@ -786,6 +774,20 @@ action:
       # Toleranzprüfung basiert auf tatsächlichem Grid-Fehler (nicht begrenzt)
       grid_error_for_tolerance: "{{ (grid_power_float - target_offset) | abs }}"
       
+      # Berechneter Hausverbrauch (vereinfacht: was das Netz liefert/nimmt + was der Inverter liefert)
+      current_house_load_estimate: "{{ current_active_power + grid_power_float }}"
+      
+      # Smarte Überschuss-Bedingung: State-Machine
+      is_surplus_mode: >
+        {% set currently_in_surplus = (states(discharge_current_entity) | float(999) == 0) and (states(active_power_entity) | float(0) >= max_active_power_limit_int) %}
+        {% if currently_in_surplus %}
+          {# Abbruchbedingung: Wenn das Netz wieder über den eingestellten Offset + Toleranz Strom abfordert #}
+          {{ (states(soc) | float(0) >= soc_export_limit_int) and (grid_power_float <= (target_offset + tolerance_int)) }}
+        {% else %}
+          {# Startbedingung: SOC ist voll UND die Sonne produziert gerade mind. 50W mehr als dein Haus insgesamt verbraucht #}
+          {{ (states(soc) | float(0) >= soc_export_limit_int) and (solar_power_float > (current_house_load_estimate + 50)) }}
+        {% endif %}
+      
       # Wartezeit
       wait_time_int: !input wait_time
       
@@ -828,7 +830,10 @@ action:
       # 5. Finale Power: Logik in einem Template zusammengefasst
       final_power_calculated: >
         {% set p_regler_power = new_power_unlimited | float(0) %}
-        {% if is_state(cycle_active, 'on') %}
+        {% if is_surplus_mode %}
+          {# ÜBERSCHUSS-EINSPEISUNG: AC-Limit auf max setzen #}
+          {{ max_active_power_limit_int | float(0) }}
+        {% elif is_state(cycle_active, 'on') %}
           {# ZONE 1: Hard Limit #}
           {{ [max_active_power_limit_int, p_regler_power] | min | float(0) }}
         {% else %}
@@ -838,14 +843,28 @@ action:
         {% endif %}
         
   - choose:
-      # FALL E.1: Limit für Zone 1 setzen (Aggressiv)
+      # FALL E.0: Überschuss-Einspeisung (Voller Akku) -> Entladung 0A erzwingen
       - conditions:
+          - condition: template
+            value_template: "{{ is_surplus_mode }}"
+          - condition: template
+            value_template: >
+              {{ states(discharge_current_entity) | float(999) | round(2) != 0 }}
+        sequence:
+          - service: number.set_value
+            data:
+              entity_id: !input max_discharge_current_number
+              value: 0
+              
+      # FALL E.1: Limit für Zone 1 setzen (Aggressiv, wenn nicht im Surplus Modus)
+      - conditions:
+          - condition: template
+            value_template: "{{ not is_surplus_mode }}"
           - condition: state
             entity_id: !input cycle_active_input_select
             state: 'on'
           - condition: template
             value_template: >
-              {# Prüfe, ob der aktuelle Wert NICHT dem Maximalwert entspricht #}
               {{ states(discharge_current_entity) | float(999) | round(2) != discharge_current_max | float(0) | round(2) }}
         sequence:
           - service: number.set_value
@@ -853,14 +872,15 @@ action:
               entity_id: !input max_discharge_current_number
               value: "{{ discharge_current_max }}"
               
-      # FALL E.2: Limit für Zone 2 setzen (Batterieschonend = 0 A)
+      # FALL E.2: Limit für Zone 2 setzen (Batterieschonend = 0 A, wenn nicht im Surplus Modus)
       - conditions:
+          - condition: template
+            value_template: "{{ not is_surplus_mode }}"
           - condition: state
             entity_id: !input cycle_active_input_select
             state: 'off'
           - condition: template
             value_template: >
-              {# Prüfe, ob der aktuelle Wert NICHT 0 A entspricht #}
               {{ states(discharge_current_entity) | float(999) | round(2) != 0 }}
         sequence:
           - service: number.set_value
@@ -891,9 +911,15 @@ action:
       entity_id: !input integral_helper
       value: "{{ integral_new }}"
       
-  # 4. Power Limit setzen (Nur wenn Toleranz überschritten ist)
+  # 4. Power Limit setzen (Nur wenn Toleranz überschritten ist oder Max SOC Einspeisung aktiv/inaktiv wird)
   - condition: template
-    value_template: "{{ grid_error_for_tolerance > tolerance_int }}"
+    value_template: >
+      {% if is_surplus_mode %}
+        {# Prüfen ob das aktuelle Output-Limit schon auf Max steht, um Modbus-Spam zu verhindern #}
+        {{ states(active_power_entity) | float(0) < max_active_power_limit_int }}
+      {% else %}
+        {{ grid_error_for_tolerance > tolerance_int }}
+      {% endif %}
   
   - service: number.set_value
     data:
@@ -901,6 +927,7 @@ action:
       value: "{{ [0, final_power_calculated] | max | round(0) }}"
   - delay:
       seconds: '{{wait_time_int}}'
+
 
 
 
