@@ -685,17 +685,41 @@ action:
                 data:
                   entity_id: !input active_power_number
                   value: 0
-                          
+
+    # -------------------------------------------------------------------------------------------------
+  # ZUSATZ: Batterie voll → Einspeisung erlauben (PI-Regler überspringen)
+  # -------------------------------------------------------------------------------------------------
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ states(soc) | float(0) >= 99 and states(solakon_mode) == '1' }}
+        sequence:
+          # Keine Batterieentladung
+          - service: number.set_value
+            data:
+              entity_id: !input max_discharge_current_number
+              value: 0
+
+          # Volle PV-Leistung freigeben
+          - service: number.set_value
+            data:
+              entity_id: !input active_power_number
+              value: "{{ states(solar_power_sensor) | float(0) }}"
+
+          - stop: Batterie voll – Einspeisung erlaubt
+          
   # -------------------------------------------------------------------------------------------------
   # AKTION E: PI-Regler Logik, Timeout-Refresh UND Entlade-Limit-Absicherung
   # NUR ausführen wenn Modus aktiv ist UND (Zone 1 ODER Tag)!
   # -------------------------------------------------------------------------------------------------
   - condition: template
     value_template: >
-      {{ states(solakon_mode) == '1' and
-         (is_state(cycle_active, 'on') or 
-          not night_shutdown_enabled_bool or
-          (states(solar_power_for_night_check) | float(0)) >= night_pv_threshold) }}
+      {{ states(solakon_mode) == '1'
+   and states(soc) | float(0) < 99
+   and (is_state(cycle_active, 'on') or 
+        not night_shutdown_enabled_bool or
+        (states(solar_power_for_night_check) | float(0)) >= night_pv_threshold) }}
     
   # ===========================================
   # BLOCK 2: Variablen NUR für PI-Regler
@@ -873,6 +897,7 @@ action:
       value: "{{ [0, final_power_calculated] | max | round(0) }}"
   - delay:
       seconds: '{{wait_time_int}}'
+
 
 
 
